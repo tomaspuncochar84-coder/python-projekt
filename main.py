@@ -1,1 +1,1 @@
-print("Hello z Linuxu")
+print("Hello z pokoje")
