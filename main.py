@@ -12,11 +12,25 @@ def zobraz_vydaje():
             print("\n--- Tvoje výdaje ---")
             print(soubor.read())
     except FileNotFoundError:
-        print("Zatím nemáš žádné výdaje.")
+        print("Zatim nemáš žádné výdaje")
+
+def soucet_vydaju():
+    try:
+        with open("vydaje.txt", "r") as soubor:
+            celkem = 0
+            for radek in soubor:
+                castka = int(radek.split("Kč")[0])
+                celkem += castka
+
+            print(f"\nCelkem jsi utratil: {celkem} Kč")
+
+    except FileNotFoundError:
+        print("Žádné výdaje.")
 while True:
     print("\n1 - Přidat výdaj")
     print("2 - Zobrazit výdaje")
-    print("3 - Konec")
+    print("3 - Součet výdajů")
+    print("4 - konec")
 
     volba = input("Vyber: ")
 
@@ -25,6 +39,8 @@ while True:
     elif volba == "2":
         zobraz_vydaje()
     elif volba == "3":
+        soucet_vydaju()
+    elif volba == "4":
         print("Čau")
         break
     else:
