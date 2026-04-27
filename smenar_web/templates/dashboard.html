@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dashboard</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f5f6fa;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 { text-align: center; margin-bottom: 20px; }
+        .container {
+            max-width: 600px;
+            margin: auto;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+        }
+        form { text-align: center; margin-bottom: 20px; }
+        input[type="date"] { padding: 8px; font-size: 16px; }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: #2f3640; color: white; padding: 10px; }
+        td { padding: 10px; text-align: center; border-bottom: 1px solid #ddd; }
+        tr:hover { background: #f1f2f6; }
+
+        select {
+            padding: 6px 8px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+            background-color: white;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        select:hover { border-color: #888; }
+        select:focus { outline: none; border-color: #2f3640; }
+        td select { width: 100%; text-align: center; }
+
+        /* Zamčený input */
+        .locked-input {
+            background: #cccccc;
+            border: 1px solid #aaa;
+            border-radius: 4px;
+            padding: 4px;
+            font-size: 13px;
+            cursor: not-allowed;
+            width: 70px;
+            text-align: center;
+        }
+        .lock-icon { font-size: 11px; margin-left: 4px; color: #555; }
+
+        /* Mol čekající na zadání */
+        .mol-waiting { background-color: #fff3cd !important; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>DENNÍ PŘEHLED SMĚN</h1>
+
+    <form method="get">
+        <input type="date" name="date" value="{{ selected_date_iso }}" onchange="this.form.submit()">
+    </form>
+
+    <table>
+        <tr>
+            <th>Jméno</th>
+            <th>Směna</th>
+            <th>Čas</th>
+        </tr>
+
+        {% for row in data %}
+        <tr>
+            <td>{{ row["Zaměstnanec"] }}</td>
+
+            <td
+                data-date="{{ row['Datum'] }}"
+                data-employee="{{ row['Zaměstnanec'] }}"
+                {% set s = row['ActualShift'] %}
+                {% if s == 'Ran' %} style="background-color:#90EE90;"
+                {% elif s == 'Odp' %} style="background-color:#FFA500;"
+                {% elif s == 'Den' %} style="background-color:#ADD8E6;"
+                {% elif s == 'Mol' %} style="background-color:#DDA0DD;"
+                {% elif s == 'D'   %} style="background-color:#FFD700;"
+                {% elif s == 'N'   %} style="background-color:#FF6347;"
+                {% endif %}
+            >
+                <select onchange="updateSelect(this)">
+                    <option value="">-</option>
+                    {% for opt in ["Ran","Odp","Den","Mol","D","N","Vol"] %}
+                    <option value="{{ opt }}" {% if row["ActualShift"] == opt %}selected{% endif %}>{{ opt }}</option>
+                    {% endfor %}
+                </select>
+
+                {% if row['has_manual_minutes'] %}
+                    {# Zamčený input – zobrazí čas + zámek, odemkne se zadáním 0 #}
+                    <input
+                        class="locked-input"
+                        type="text"
+                        value="{{ row['Výkon'] }}"
+                        disabled
+                        title="Zadej 0 pro odemknutí"
+                        onblur="unlockIfZero(this)">
+                    <span class="lock-icon">🔒</span>
+                {% else %}
+                    {# Volný input #}
+                    <input
+                        type="text"
+                        value=""
+                        placeholder="např. 1:30"
+                        style="width:70px; margin-top:5px;"
+                        onblur="updateMinutes(this)">
+                    {% if row['ActualShift'] == 'Mol' and not row['has_manual_minutes'] %}
+                        <br><small style="color:#b8860b;">⚠ zadej čas</small>
+                    {% endif %}
+                {% endif %}
+            </td>
+
+            <td>
+                {% if row["ActualShift"] not in ["Vol", ""] %}
+                    {{ get_shift_time(row["ActualShift"], row["date_obj"]) }}
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+
+<script>
+function updateSelect(select) {
+    const cell = select.closest("td");
+    const minutesInput = cell.querySelector("input:not([disabled])");
+
+    const colors = {
+        "Ran":"#90EE90","Odp":"#FFA500","Den":"#ADD8E6",
+        "Mol":"#DDA0DD","D":"#FFD700","N":"#FF6347"
+    };
+    cell.style.backgroundColor = colors[select.value] || "";
+
+    const data = {
+        Datum: cell.dataset.date,
+        Zaměstnanec: cell.dataset.employee,
+        ActualShift: select.value,
+        Minuty: minutesInput ? minutesInput.value : ""
+    };
+
+    fetch("/update_cell", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data)
+    }).then(() => location.reload());
+}
+
+function updateMinutes(input) {
+    const val = input.value.trim();
+    if (!val) return;
+    const cell = input.closest("td");
+    const data = {
+        Datum: cell.dataset.date,
+        Zaměstnanec: cell.dataset.employee,
+        ActualShift: cell.querySelector("select").value,
+        Minuty: val
+    };
+    fetch("/update_cell", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data)
+    }).then(() => location.reload());
+}
+
+/**
+ * Pokud uživatel zadá 0 do zamčeného inputu → odemknutí (odešleme Minuty=0).
+ * Musíme nejdřív input odblokovat, aby mohl psát.
+ */
+function unlockIfZero(input) {
+    // Nejprve povolíme editaci kliknutím dvojklikem nebo změnou na 0
+    const val = input.value.trim();
+    if (val === "0" || val === "") {
+        input.disabled = false;
+        input.classList.remove("locked-input");
+        const cell = input.closest("td");
+        const data = {
+            Datum: cell.dataset.date,
+            Zaměstnanec: cell.dataset.employee,
+            ActualShift: cell.querySelector("select").value,
+            Minuty: "0"
+        };
+        fetch("/update_cell", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(data)
+        }).then(() => location.reload());
+    }
+}
+
+// Umožní editaci zamčeného inputu dvojklikem
+document.addEventListener("dblclick", function(e) {
+    if (e.target.classList.contains("locked-input")) {
+        e.target.disabled = false;
+        e.target.classList.remove("locked-input");
+        e.target.value = "";
+        e.target.focus();
+        e.target.addEventListener("blur", function() {
+            unlockIfZero(e.target);
+        }, { once: true });
+    }
+});
+</script>
+</body>
+</html>

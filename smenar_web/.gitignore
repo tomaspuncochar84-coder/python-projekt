@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+uploads/
+smenar_backend.csv
+smenar_export.csv
+smenar_summary.csv

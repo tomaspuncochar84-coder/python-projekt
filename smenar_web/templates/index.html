@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Směnář</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { font-family: sans-serif; background-color: #f4f7f6; padding: 20px; }
+        h1 { color: #2f3640; }
+        table {
+            border-collapse: collapse;
+            background: white;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            margin-bottom: 30px;
+            width: 100%;
+        }
+        th {
+            background-color: #34495e;
+            color: white;
+            padding: 8px 5px;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        td {
+            padding: 4px;
+            text-align: center;
+            border: 1px solid #ddd;
+            font-size: 12px;
+        }
+        td.total-cell {
+            font-weight: bold;
+            background: #ecf0f1;
+            font-size: 12px;
+        }
+
+        .table-wrapper {
+            width: 100%;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            margin-bottom: 20px;
+            border: 1px solid #ccc;
+        }
+
+        .shift-select {
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 2px;
+            background: white;
+            width: 55px;
+            font-size: 11px;
+        }
+        .time-input {
+            border: 1px solid #eee;
+            border-radius: 4px;
+            text-align: center;
+            width: 42px;
+            font-size: 10px;
+            display: block;
+            margin: 3px auto 0;
+        }
+        .time-input:focus { border-color: #3498db; outline: none; }
+
+        /* ── Zamčená buňka ── */
+        .cell-locked {
+            background-color: #cccccc !important;
+            position: relative;
+        }
+        .cell-locked .time-input {
+            background-color: #bbbbbb;
+            color: #444;
+            cursor: not-allowed;
+        }
+        .lock-icon {
+            font-size: 11px;
+            display: block;
+            margin-top: 2px;
+            cursor: pointer;
+            user-select: none;
+            transition: transform 0.1s;
+        }
+        .lock-icon:hover {
+            transform: scale(1.3);
+        }
+
+        /* ── Mol svátek čeká na zadání ── */
+        .cell-mol-waiting {
+            background-color: #fff3cd !important;
+        }
+
+        /* Barvy směn */
+        .shift-ran  { background-color: #90EE90; }
+        .shift-odp  { background-color: #FFA500; }
+        .shift-den  { background-color: #ADD8E6; }
+        .shift-mol  { background-color: #DDA0DD; }
+        .shift-d    { background-color: #FFD700; }
+        .shift-n    { background-color: #FF6347; }
+        .shift-vol  { background-color: #ffffff; }
+        .shift-vikend { background-color: #66ccff; }
+        .shift-svatek { background-color: #ff6666; color: white; }
+
+        @media screen and (max-width: 768px) {
+            body { padding: 10px; }
+            h3 { position: sticky; left: 0; background: #eee; padding: 5px; z-index: 5; }
+            td:nth-child(1), th:nth-child(1) { display: none; }
+            td:nth-child(2), th:nth-child(2) {
+                position: sticky;
+                left: 0;
+                background-color: #f9f9f9 !important;
+                z-index: 3;
+                box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+                min-width: 80px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<h1>📅 Generátor směn</h1>
+<button onclick="regenerate()" style="padding:10px; cursor:pointer; margin-bottom:15px; margin-right:8px; background:#e74c3c; color:white; border:none; border-radius:4px;">
+    🔄 Přegenerovat rozvrh
+</button>
+<button onclick="exportData()" style="padding:10px; cursor:pointer; margin-bottom:15px;">
+    📥 Export do Excelu
+</button>
+
+<div id="schedule"></div>
+
+<h2>🔄 Náhradníci</h2>
+<div id="subs" style="background:white; padding:15px; border-radius:5px; box-shadow:0 2px 5px rgba(0,0,0,0.1);"></div>
+
+<script>
+const monthNames = {
+    "01":"leden","02":"únor","03":"březen","04":"duben",
+    "05":"květen","06":"červen","07":"červenec","08":"srpen",
+    "09":"září","10":"říjen","11":"listopad","12":"prosinec"
+};
+
+function formatMinutes(mins) {
+    if (!mins && mins !== 0) return "";
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
+}
+
+function formatDiff(mins) {
+    const sign = mins >= 0 ? "+" : "-";
+    const abs = Math.abs(mins);
+    return `${sign}${String(Math.floor(abs/60)).padStart(2,"0")}:${String(abs%60).padStart(2,"0")}`;
+}
+
+/**
+ * Odešle změnu na server, pak aktualizuje součty v řádku tabulky.
+ */
+function saveChange(date, employee, element) {
+    const td = element.closest("td");
+    const select = td.querySelector("select");
+    const input  = td.querySelector("input");
+    const row    = element.closest("tr");
+
+    // Pokud je input zamčený a přijde hodnota "0" → odešleme 0 = odemknutí
+    const timeVal = input ? input.value.trim() : "";
+
+    const payload = {
+        Datum: date,
+        Zaměstnanec: employee,
+        ActualShift: select ? select.value : "",
+        Minuty: timeVal
+    };
+
+    // Vizuální indikace ukládání
+    td.style.opacity = "0.6";
+
+    fetch("/update_cell", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+    })
+    .then(res => res.json())
+    .then(json => {
+        td.style.opacity = "1";
+        const month = date.split(".")[1];
+        const t = (json.totals[month] || {})[employee] || { vykon:0, dovolena:0, nemoc:0, fond:0 };
+        const cells = row.cells;
+        const n = cells.length;
+        // Poslední 5 sloupců: Fond, Výkon, Rozdíl, Dovolená, Nemoc
+        cells[n-5].innerText = formatMinutes(t.fond   || 0);
+        cells[n-4].innerText = formatMinutes(t.vykon  || 0);
+        cells[n-3].innerText = formatDiff((t.vykon||0) - (t.fond||0));
+        cells[n-2].innerText = formatMinutes(t.dovolena || 0);
+        cells[n-1].innerText = formatMinutes(t.nemoc || 0);
+
+        // Překreslíme data pro tento měsíc aby se aktualizovaly zamčené buňky
+        buildYear(json.employees_by_month, json.totals);
+        updateSubs(json.substitutes || []);
+    })
+    .catch(() => { td.style.opacity = "1"; });
+}
+
+function getShiftClass(actual, isHoliday, isWeekend) {
+    if (isHoliday) return "shift-svatek";
+    if (isWeekend) return "shift-vikend";
+    const map = {
+        "Ran":"shift-ran","Odp":"shift-odp","Den":"shift-den",
+        "Mol":"shift-mol","D":"shift-d","N":"shift-n","Vol":"shift-vol"
+    };
+    return map[actual] || "";
+}
+
+function buildTableForMonth(table, data, totals) {
+    const allDates = new Set();
+    for (const days of Object.values(data)) {
+        Object.keys(days).forEach(d => allDates.add(d));
+    }
+    const dates = Array.from(allDates).sort((a, b) => {
+        const [d1,m1,y1] = a.split(".");
+        const [d2,m2,y2] = b.split(".");
+        return new Date(y1,m1-1,d1) - new Date(y2,m2-1,d2);
+    });
+
+    // Záhlaví
+    let header = "<tr><th>Měsíc</th><th>Jméno</th>";
+    dates.forEach(d => {
+        const parts = d.split(".");
+        header += `<th>${parts[0]}</th>`;
+    });
+    header += "<th>Fond</th><th>Výkon</th><th>Rozdíl</th><th>Dov.</th><th>Nemoc</th></tr>";
+    table.innerHTML = header;
+
+    for (const [name, days] of Object.entries(data)) {
+        const firstDate = Object.keys(days)[0];
+        const month = firstDate.split(".")[1];
+        const row = document.createElement("tr");
+
+        let cellsHtml = `<td>${monthNames[month] || month}</td><td><strong>${name}</strong></td>`;
+
+        dates.forEach(d => {
+            const cell = days[d] || {};
+            const actual       = cell.actual || "";
+            const isHoliday    = !!cell.is_holiday;
+            const isWeekend    = !!cell.is_weekend;
+            const hasManual    = !!cell.has_manual_minutes;
+            const molWaiting   = !!cell.mol_waiting;
+
+            // Třídy buňky
+            let tdClass = getShiftClass(actual, isHoliday, isWeekend);
+            if (hasManual) tdClass = "cell-locked";
+            else if (molWaiting) tdClass += " cell-mol-waiting";
+
+            // Select
+            const shifts = ["","Vol","Ran","Odp","Den","Mol","D","N","Šk"];
+            let selectHtml = `<select class="shift-select" onchange="saveChange('${d}','${name}',this)">`;
+            shifts.forEach(s => {
+                const sel = actual === s ? "selected" : "";
+                selectHtml += `<option value="${s}" ${sel}>${s || "-"}</option>`;
+            });
+            selectHtml += `</select>`;
+
+            // Input – zamčený pokud has_manual, odemkne se zadáním "0"
+            let inputVal = hasManual ? formatMinutes(cell.vykon) : "";
+            let inputDisabled = hasManual ? "disabled" : "";
+            let lockIcon = hasManual ? `<span class="lock-icon" title="Klikni pro odemčení" onclick="unlockCell('${d}','${name}',this)">🔒</span>` : "";
+
+            // Hint pro mol_waiting
+            let molHint = molWaiting ? `<span style="font-size:9px;color:#b8860b;">zadej čas</span>` : "";
+
+            const inputHtml = `
+                <input type="text"
+                    class="time-input"
+                    placeholder="0:00"
+                    value="${inputVal}"
+                    ${inputDisabled}
+                    onchange="handleTimeInput('${d}','${name}',this)"
+                    onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();handleTimeInput('${d}','${name}',this);}">
+                ${lockIcon}
+                ${molHint}
+            `;
+
+            cellsHtml += `<td class="${tdClass}">${selectHtml}${inputHtml}</td>`;
+        });
+
+        const t = (totals[month] || {})[name] || { vykon:0, dovolena:0, nemoc:0, fond:0 };
+        cellsHtml += `
+            <td class="total-cell">${formatMinutes(t.fond    || 0)}</td>
+            <td class="total-cell">${formatMinutes(t.vykon   || 0)}</td>
+            <td class="total-cell">${formatDiff((t.vykon||0)-(t.fond||0))}</td>
+            <td class="total-cell">${formatMinutes(t.dovolena|| 0)}</td>
+            <td class="total-cell">${formatMinutes(t.nemoc   || 0)}</td>
+        `;
+        row.innerHTML = cellsHtml;
+        table.appendChild(row);
+    }
+}
+
+/**
+ * Odemknutí buňky kliknutím na 🔒 ikonu.
+ * Odešle Minuty=0 → server vymaže ruční zápis.
+ */
+function unlockCell(date, employee, lockEl) {
+    const td = lockEl.closest("td");
+    const select = td.querySelector("select");
+
+    lockEl.innerText = "⏳";
+
+    fetch("/update_cell", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            Datum: date,
+            Zaměstnanec: employee,
+            ActualShift: select ? select.value : "",
+            Minuty: "0"
+        })
+    })
+    .then(res => res.json())
+    .then(json => {
+        buildYear(json.employees_by_month, json.totals);
+        updateSubs(json.substitutes || []);
+    })
+    .catch(() => { lockEl.innerText = "🔒"; });
+}
+
+/**
+ * Zpracování ručního vstupu hodin.
+ * Pokud hodnota == "0" nebo "" → odešleme 0, server odemkne buňku.
+ * Jinak → normální uložení.
+ */
+function handleTimeInput(date, employee, inputEl) {
+    const val = inputEl.value.trim();
+    // "0" = signál pro odemknutí
+    if (val === "0") {
+        inputEl.value = "0";
+    }
+    saveChange(date, employee, inputEl);
+}
+
+function buildYear(data, totals) {
+    const container = document.getElementById("schedule");
+    container.innerHTML = "";
+    const sortedMonths = Object.keys(data).sort((a,b) => Number(a)-Number(b));
+
+    for (const month of sortedMonths) {
+        const title = document.createElement("h3");
+        title.innerText = (monthNames[month] || month).toUpperCase();
+        container.appendChild(title);
+
+        const wrapper = document.createElement("div");
+        wrapper.className = "table-wrapper";
+        const table = document.createElement("table");
+        wrapper.appendChild(table);
+        container.appendChild(wrapper);
+
+        buildTableForMonth(table, data[month], totals);
+    }
+}
+
+function updateSubs(subs) {
+    const div = document.getElementById("subs");
+    if (!subs || subs.length === 0) {
+        div.innerHTML = "<em>Žádní náhradníci</em>";
+        return;
+    }
+    div.innerHTML = "";
+    subs.forEach(s => {
+        const p = document.createElement("p");
+        p.style.borderBottom = "1px solid #eee";
+        p.style.padding = "5px 0";
+        p.innerHTML = `<strong>${s.date}</strong>: ${s.employee} (${s.reason}) → <span style="color:blue">${s.substitute}</span> ${s.shift ? "("+s.shift+")" : ""}`;
+        div.appendChild(p);
+    });
+}
+
+function exportData() { window.location.href = "/export"; }
+
+function regenerate() {
+    if (!confirm("Přegenerovat celý rozvrh? Ruční úpravy v overrides.csv zůstanou zachovány.")) return;
+    const btn = document.querySelector("button[onclick='regenerate()']");
+    btn.innerText = "⏳ Generuji...";
+    btn.disabled = true;
+    fetch("/regenerate", { method: "POST" })
+        .then(res => res.json())
+        .then(() => {
+            btn.innerText = "🔄 Přegenerovat rozvrh";
+            btn.disabled = false;
+            return fetch("/get_data").then(r => r.json());
+        })
+        .then(json => {
+            buildYear(json.employees_by_month, json.totals);
+            updateSubs(json.substitutes || []);
+        });
+}
+
+window.onload = function() {
+    fetch("/get_data")
+        .then(res => res.json())
+        .then(json => {
+            buildYear(json.employees_by_month, json.totals);
+            updateSubs(json.substitutes || []);
+        })
+        .catch(err => {
+            document.getElementById("schedule").innerHTML =
+                `<p style="color:red">Chyba při načítání dat: ${err}</p>`;
+        });
+};
+</script>
+</body>
+</html>
